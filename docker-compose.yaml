@@ -1,6 +1,36 @@
 services:
+  api:
+    build: ./app/
+    image: ml-service-api:latest
+    container_name: ml-service-api
+    restart: unless-stopped
+    command: ["uvicorn", "api:app", "--host", "0.0.0.0", "--port", "8080"]
+    env_file:
+      - ./app/.env
+    environment:
+      DB_HOST: database
+      DB_PORT: "5432"
+    ports:
+      - "8080:8080"
+    volumes:
+      - ./app:/app
+    depends_on:
+      - database
+    networks:
+      - ml-service-network
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8080/health')"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 20s
+
   app:
     build: ./app/
+    image: ml-service-ui:latest
+    container_name: ml-service-ui
+    restart: unless-stopped
+    command: ["streamlit", "run", "streamlit_app.py", "--server.port=8501", "--server.address=0.0.0.0"]
     env_file:
       - ./app/.env
     environment:
@@ -17,11 +47,16 @@ services:
 
   web-proxy:
     image: nginx
+    container_name: ml-service-nginx
+    restart: unless-stopped
     ports:
       - "80:80"
       - "443:443"
     depends_on:
-      - app
+      api:
+        condition: service_healthy
+      app:
+        condition: service_started
     volumes:
       - ./nginx/nginx.conf:/etc/nginx/nginx.conf
     networks:
@@ -29,6 +64,8 @@ services:
 
   database:
     image: postgres:16
+    container_name: ml-service-db
+    restart: unless-stopped
     ports:
       - "5433:5432"
     volumes:

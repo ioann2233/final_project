@@ -34,6 +34,7 @@ def logout():
 def page_home():
     st.title("ML Service — СКУД")
     st.caption("Сервис детекции объектов с балансом и ML-моделями")
+    st.info("REST API: http://localhost:8080/api/docs | UI через nginx: http://localhost/")
 
     try:
         users = run_with_context(get_all_users)

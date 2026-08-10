@@ -9,7 +9,11 @@ from service.testing.user import get_user_by_id
 from sqlalchemy.orm import joinedload
 
 
-def purchase_model(user_id: int, model_id: int) -> MLTask:
+def create_prediction_task(
+    user_id: int,
+    model_id: int,
+    image_path: str = "pending",
+) -> MLTask:
     user = get_user_by_id(user_id)
     model = get_ml_model_by_id(model_id)
 
@@ -25,7 +29,7 @@ def purchase_model(user_id: int, model_id: int) -> MLTask:
     task = MLTask(
         user_id=user.id,
         model_id=model.id,
-        image_path="pending",
+        image_path=image_path,
         status=TaskStatus.CREATED.value,
     )
     db.session.add(task)
@@ -41,6 +45,10 @@ def purchase_model(user_id: int, model_id: int) -> MLTask:
     db.session.commit()
     db.session.refresh(task)
     return task
+
+
+def purchase_model(user_id: int, model_id: int) -> MLTask:
+    return create_prediction_task(user_id, model_id, image_path="pending")
 
 
 def get_user_tasks(user_id: int) -> List[MLTask]:

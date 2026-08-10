@@ -5,3 +5,6 @@ requests
 python-dotenv
 streamlit
 pandas
+fastapi
+uvicorn[standard]
+pydantic

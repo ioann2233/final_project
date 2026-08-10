@@ -11,7 +11,7 @@ def create_app():
 
     import models  # noqa: F401
 
-    from routes import bp
+    from flask_routes import bp
     app.register_blueprint(bp)
 
     @app.cli.command("init-db")
