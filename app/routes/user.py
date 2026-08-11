@@ -66,7 +66,7 @@ async def signin(
 
 
 @user_route.get(
-    "/get_all_users",
+    "/",
     response_model=List[UserResponse],
     summary="Список пользователей",
 )

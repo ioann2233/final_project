@@ -26,3 +26,8 @@ class TransactionInfo(BaseModel):
 class TopUpResponse(BaseModel):
     transaction: TransactionInfo
     balance: float
+
+
+class TransactionHistoryResponse(BaseModel):
+    user_id: int
+    transactions: list[TransactionInfo]
