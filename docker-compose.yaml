@@ -10,12 +10,20 @@ services:
     environment:
       DB_HOST: database
       DB_PORT: "5432"
+      RABBITMQ_HOST: rabbitmq
+      RABBITMQ_PORT: "5672"
+      RABBITMQ_USER: ${RABBITMQ_USER:-rmuser}
+      RABBITMQ_PASS: ${RABBITMQ_PASS:-rmpassword}
+      RABBITMQ_QUEUE: ml_task_queue
     ports:
       - "8080:8080"
     volumes:
       - ./app:/app
     depends_on:
-      - database
+      database:
+        condition: service_started
+      rabbitmq:
+        condition: service_healthy
     networks:
       - ml-service-network
     healthcheck:
@@ -24,6 +32,31 @@ services:
       timeout: 10s
       retries: 3
       start_period: 20s
+
+  ml_worker:
+    build: ./app/
+    image: ml-service-api:latest
+    restart: unless-stopped
+    command: ["python", "-m", "worker.main"]
+    env_file:
+      - ./app/.env
+    environment:
+      DB_HOST: database
+      DB_PORT: "5432"
+      RABBITMQ_HOST: rabbitmq
+      RABBITMQ_PORT: "5672"
+      RABBITMQ_USER: ${RABBITMQ_USER:-rmuser}
+      RABBITMQ_PASS: ${RABBITMQ_PASS:-rmpassword}
+      RABBITMQ_QUEUE: ml_task_queue
+    volumes:
+      - ./app:/app
+    depends_on:
+      database:
+        condition: service_started
+      rabbitmq:
+        condition: service_healthy
+    networks:
+      - ml-service-network
 
   app:
     build: ./app/
@@ -75,8 +108,32 @@ services:
     networks:
       - ml-service-network
 
+  rabbitmq:
+    image: rabbitmq:3.13.1-management-alpine
+    container_name: ml-service-rabbitmq
+    hostname: rabbitmq
+    restart: unless-stopped
+    environment:
+      RABBITMQ_DEFAULT_USER: ${RABBITMQ_USER:-rmuser}
+      RABBITMQ_DEFAULT_PASS: ${RABBITMQ_PASS:-rmpassword}
+      RABBITMQ_SERVER_ADDITIONAL_ERL_ARGS: -rabbit disk_free_limit 2147483648
+    volumes:
+      - rabbitmq_data:/var/lib/rabbitmq
+    ports:
+      - "15672:15672"
+      - "5672:5672"
+    healthcheck:
+      test: ["CMD", "rabbitmq-diagnostics", "check_running"]
+      interval: 15s
+      timeout: 10s
+      retries: 5
+      start_period: 20s
+    networks:
+      - ml-service-network
+
 volumes:
   postgres_data:
+  rabbitmq_data:
 
 networks:
   ml-service-network:

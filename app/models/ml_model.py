@@ -14,7 +14,9 @@ class MLModel(BaseModel):
     tasks = db.relationship("MLTask", back_populates="model", lazy="select")
 
     def predict(self, image_path: str) -> list:
-        raise NotImplementedError("ML inference пока в разработке")
+        from worker.predictor import run_prediction
+
+        return run_prediction(self.name, self.model_path, image_path)
 
     def get_info(self) -> dict:
         info = super().get_info()
