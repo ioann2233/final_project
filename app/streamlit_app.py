@@ -223,6 +223,7 @@ def page_cabinet():
             "top_up": "Пополнение",
             "purchase": "Покупка модели",
             "spend": "Списание",
+            "refund": "Возврат",
         }
         st.dataframe(
             [

@@ -65,6 +65,44 @@ def _parse_message(body: bytes) -> Dict[str, Any]:
     return {"task_id": task_id}
 
 
+def _refund_task_payment(task) -> float:
+    """Возвращает списанные за задачу средства. Работа не выполнена."""
+    from models.transaction import Transaction
+
+    if not task.user or not task.user.wallet:
+        return 0.0
+
+    already_refunded = any(
+        tx.transaction_type == "refund" for tx in task.transactions
+    )
+    if already_refunded:
+        return 0.0
+
+    purchase = next(
+        (tx for tx in task.transactions if tx.transaction_type == "purchase"),
+        None,
+    )
+    if purchase and purchase.amount > 0:
+        amount = float(purchase.amount)
+    elif task.model and task.model.price > 0:
+        amount = float(task.model.price)
+    else:
+        return 0.0
+
+    from extensions import db
+
+    task.user.add_balance(amount)
+    db.session.add(
+        Transaction(
+            user_id=task.user_id,
+            amount=amount,
+            transaction_type="refund",
+            task_id=task.id,
+        )
+    )
+    return amount
+
+
 def process_task(task_id: int) -> None:
     from extensions import db
     from models.base import TaskStatus
@@ -122,11 +160,27 @@ def process_task(task_id: int) -> None:
         )
     except Exception:
         db.session.rollback()
-        task = db.session.get(MLTask, task_id)
+        task = (
+            db.session.query(MLTask)
+            .options(
+                joinedload(MLTask.model),
+                joinedload(MLTask.user),
+                joinedload(MLTask.transactions),
+            )
+            .filter_by(id=task_id)
+            .first()
+        )
         if task:
             task.status = TaskStatus.FAILED.value
             task.completed_at = datetime.utcnow()
+            refunded = _refund_task_payment(task)
             db.session.commit()
+            logger.warning(
+                "[%s] task_id=%s FAILED, refunded=%.2f",
+                WORKER_ID,
+                task_id,
+                refunded,
+            )
         raise
 
 
