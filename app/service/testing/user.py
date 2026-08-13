@@ -1,8 +1,11 @@
 from typing import List, Optional
 
+from auth.hash_password import HashPassword
 from extensions import db
 from models.user import User
 from models.wallet import Wallet
+
+hash_password = HashPassword()
 
 
 def create_user(
@@ -15,7 +18,11 @@ def create_user(
     if existing:
         raise ValueError(f"Пользователь '{username}' уже существует")
 
-    user = User(username=username, password=password, role=role)
+    user = User(
+        username=username,
+        password=hash_password.create_hash(password),
+        role=role,
+    )
     db.session.add(user)
     db.session.flush()
 

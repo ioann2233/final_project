@@ -67,14 +67,14 @@ services:
     env_file:
       - ./app/.env
     environment:
-      DB_HOST: database
-      DB_PORT: "5432"
+      API_BASE_URL: http://api:8080
     ports:
       - "8502:8501"
     volumes:
       - ./app:/app
     depends_on:
-      - database
+      api:
+        condition: service_healthy
     networks:
       - ml-service-network
 

@@ -112,7 +112,12 @@ def process_task(task_id: int) -> None:
 
     task: Optional[MLTask] = (
         db.session.query(MLTask)
-        .options(joinedload(MLTask.model), joinedload(MLTask.result))
+        .options(
+            joinedload(MLTask.model),
+            joinedload(MLTask.result),
+            joinedload(MLTask.user),
+            joinedload(MLTask.transactions),
+        )
         .filter_by(id=task_id)
         .first()
     )
@@ -125,6 +130,17 @@ def process_task(task_id: int) -> None:
 
     if not task.model or not task.model.is_active:
         raise ValidationError("Модель недоступна или неактивна")
+
+    already_charged = any(
+        tx.transaction_type == "purchase" for tx in (task.transactions or [])
+    )
+    price = float(task.model.price) if task.model else 0.0
+    if not already_charged and task.user and task.user.get_balance() < price:
+        task.status = TaskStatus.NOT_ENOUGH_BALANCE.value
+        task.completed_at = datetime.utcnow()
+        db.session.commit()
+        logger.warning("[%s] task_id=%s NOT_ENOUGH_BALANCE", WORKER_ID, task_id)
+        return
 
     task.status = TaskStatus.RUNNING.value
     db.session.commit()
@@ -149,14 +165,37 @@ def process_task(task_id: int) -> None:
         else:
             task.result.predictions = predictions
 
+        if not already_charged and price > 0:
+            from models.transaction import Transaction
+
+            if not task.user.subtract_balance(price):
+                task.status = TaskStatus.NOT_ENOUGH_BALANCE.value
+                task.completed_at = datetime.utcnow()
+                db.session.commit()
+                logger.warning(
+                    "[%s] task_id=%s predict ok, но списание не удалось",
+                    WORKER_ID,
+                    task_id,
+                )
+                return
+            db.session.add(
+                Transaction(
+                    user_id=task.user_id,
+                    amount=price,
+                    transaction_type="purchase",
+                    task_id=task.id,
+                )
+            )
+
         task.status = TaskStatus.COMPLETED.value
         task.completed_at = datetime.utcnow()
         db.session.commit()
         logger.info(
-            "[%s] task_id=%s COMPLETED detections=%s",
+            "[%s] task_id=%s COMPLETED detections=%s charged=%s",
             WORKER_ID,
             task_id,
             len(predictions),
+            price if not already_charged else 0,
         )
     except Exception:
         db.session.rollback()

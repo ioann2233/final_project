@@ -1,288 +1,489 @@
+import io
+from typing import Optional
+
+import pandas as pd
 import streamlit as st
 
-from service.auth import authenticate_user
-from service.testing.ml_model import get_active_models
-from service.testing.ml_task import get_user_tasks_rows, purchase_model
-from service.testing.transaction import get_user_transactions
-from service.testing.user import create_user, get_all_users, get_user_by_id
-from service.testing.wallet import top_up_balance
-from ui.context import run_with_context
+from auth.forms import LoginForm, RegisterForm
+from ui import api_client as api
+from ui.api_client import APIError
+
+STATUS_LABELS = {
+    "created": "Создана",
+    "running": "Выполняется",
+    "completed": "Готово",
+    "failed": "Ошибка",
+    "not enough balance": "Недостаточно средств",
+}
+TX_LABELS = {
+    "top_up": "Пополнение",
+    "purchase": "Списание за предикт",
+    "spend": "Списание",
+    "refund": "Возврат",
+}
+
 
 def init_session():
-    if "user_id" not in st.session_state:
-        st.session_state.user_id = None
-    if "page" not in st.session_state:
-        st.session_state.page = "Главная"
+    st.session_state.setdefault("access_token", None)
 
 
-def get_current_user():
-    user_id = st.session_state.get("user_id")
-    if not user_id:
+def token() -> Optional[str]:
+    return st.session_state.get("access_token")
+
+
+def show_api_error(exc: APIError) -> None:
+    st.error(str(exc))
+    payload = exc.payload or {}
+    detail = payload.get("detail") if isinstance(payload, dict) else None
+    if isinstance(detail, dict) and detail.get("rejected"):
+        st.subheader("Отклонённые данные")
+        st.dataframe(detail["rejected"], use_container_width=True, hide_index=True)
+
+
+def current_user() -> Optional[dict]:
+    access = token()
+    if not access:
         return None
-    return run_with_context(get_user_by_id, user_id)
+    try:
+        return api.me(access)
+    except APIError:
+        st.session_state.access_token = None
+        return None
 
 
-def login(user_id: int):
-    st.session_state.user_id = user_id
-
-
-def logout():
-    st.session_state.user_id = None
-    st.session_state.page = "Главная"
+def require_login() -> Optional[dict]:
+    user = current_user()
+    if not user:
+        st.warning("Войдите, чтобы открыть личный кабинет.")
+        return None
+    return user
 
 
 def page_home():
-    st.title("ML Service — СКУД")
-    st.caption("Сервис детекции объектов с балансом и ML-моделями")
-    st.info("REST API: http://localhost:8080/api/docs | UI через nginx: http://localhost/")
+    st.title("ML Service — личный кабинет СКУД")
+    st.markdown(
+        """
+Сервис детекции объектов для систем контроля доступа: загрузите кадры с камеры,
+выберите модель и получите список найденных объектов (`person`, `own`/`stranger` и др.).
 
+**Что умеет кабинет**
+- регистрация и вход (JWT);
+- баланс в условных кредитах и пополнение без эквайринга;
+- ML-запрос через тот же REST API, что доступен снаружи;
+- частичная валидация входа: ошибочные строки возвращаются, корректные идут в предикт;
+- история загрузок, предсказаний и списаний.
+
+Списание кредитов происходит **только после успешного** выполнения запроса воркером.
+При нулевом или недостаточном балансе запрос не ставится в очередь.
+        """
+    )
+    user = current_user()
+    if user:
+        st.success(f"Вы вошли как **{user['username']}**. Баланс: {user['balance']:.2f} ₽")
+    else:
+        st.info("Авторизация не нужна для этой страницы. Чтобы работать с балансом и предиктами — войдите.")
+        st.caption("Демо: `demo_user` / `demo1234` · админ: `demo_admin` / `admin1234`")
+
+    st.subheader("Доступные модели")
     try:
-        users = run_with_context(get_all_users)
-        models = run_with_context(get_active_models)
-        st.success("База данных подключена")
-    except Exception as exc:
-        st.error(f"База данных недоступна: {exc}")
-        st.info("Запустите: `docker compose up -d database` и `flask seed-db`")
+        models = api.list_models()
+    except APIError as exc:
+        show_api_error(exc)
         return
-
-    col1, col2 = st.columns(2)
-    with col1:
-        st.metric("Пользователей", len(users))
-    with col2:
-        st.metric("ML-моделей", len(models))
-
-    st.subheader("Пользователи")
-    if users:
-        st.dataframe(
-            [
-                {
-                    "ID": u.id,
-                    "Логин": u.username,
-                    "Роль": u.role,
-                    "Баланс": f"{u.get_balance():.2f} ₽",
-                }
-                for u in users
-            ],
-            use_container_width=True,
-            hide_index=True,
-        )
-    else:
-        st.info("Нет пользователей. Выполните seed-db.")
-
-    st.subheader("ML-модели")
-    if models:
-        st.dataframe(
-            [
-                {
-                    "ID": m.id,
-                    "Название": m.name,
-                    "Описание": m.description,
-                    "Цена": f"{m.price:.2f} ₽",
-                }
-                for m in models
-            ],
-            use_container_width=True,
-            hide_index=True,
-        )
-    else:
-        st.info("Нет моделей.")
-
-
-def page_register():
-    st.title("Регистрация")
-    st.caption("Создайте аккаунт в ML Service")
-
-    with st.form("register_form"):
-        username = st.text_input("Логин", placeholder="ivan")
-        password = st.text_input("Пароль", type="password", placeholder="минимум 4 символа")
-        initial_balance = st.number_input("Начальный баланс (₽)", min_value=0.0, value=0.0, step=1.0)
-        submitted = st.form_submit_button("Зарегистрироваться", type="primary")
-
-    if submitted:
-        if not username or not password:
-            st.error("Логин и пароль обязательны")
-            return
-        try:
-            user = run_with_context(
-                create_user,
-                username.strip(),
-                password,
-                "user",
-                float(initial_balance),
-            )
-            login(user.id)
-            st.success(f"Аккаунт «{user.username}» создан! Баланс: {user.get_balance():.2f} ₽")
-            st.session_state.page = "Личный кабинет"
-            st.rerun()
-        except ValueError as exc:
-            st.error(str(exc))
+    if not models:
+        st.info("Модели не загружены. Выполните `docker compose exec api python seed.py`.")
+        return
+    st.dataframe(
+        [
+            {
+                "ID": item["id"],
+                "Название": item["name"],
+                "Описание": item["description"],
+                "Цена, ₽": item["price"],
+            }
+            for item in models
+        ],
+        use_container_width=True,
+        hide_index=True,
+    )
 
 
 def page_login():
     st.title("Вход")
-    st.caption("Войдите в личный кабинет")
-
     with st.form("login_form"):
         username = st.text_input("Логин")
         password = st.text_input("Пароль", type="password")
         submitted = st.form_submit_button("Войти", type="primary")
+    if not submitted:
+        return
+    form = LoginForm(username, password)
+    if not form.is_valid():
+        for error in form.errors:
+            st.error(error)
+        return
+    try:
+        data = api.signin(form.username, form.password)
+    except APIError as exc:
+        show_api_error(exc)
+        return
+    st.session_state.access_token = data["access_token"]
+    st.success(f"Вход выполнен. Добро пожаловать, {data['username']}!")
+    st.rerun()
 
-    if submitted:
-        user = run_with_context(authenticate_user, username.strip(), password)
-        if not user:
-            st.error("Неверный логин или пароль")
-            return
-        login(user.id)
-        st.success(f"Добро пожаловать, {user.username}!")
-        st.session_state.page = "Личный кабинет"
-        st.rerun()
 
-    st.info("Демо: demo_user / demo1234")
+def page_register():
+    st.title("Регистрация")
+    with st.form("register_form"):
+        username = st.text_input("Логин")
+        password = st.text_input("Пароль", type="password")
+        initial_balance = st.number_input("Начальный баланс (₽)", min_value=0.0, value=0.0, step=1.0)
+        submitted = st.form_submit_button("Создать аккаунт", type="primary")
+    if not submitted:
+        return
+    form = RegisterForm(username, password, float(initial_balance))
+    if not form.is_valid():
+        for error in form.errors:
+            st.error(error)
+        return
+    try:
+        data = api.signup(form.username, form.password, form.initial_balance)
+    except APIError as exc:
+        show_api_error(exc)
+        return
+    st.session_state.access_token = data["access_token"]
+    st.success(f"Аккаунт «{data['username']}» создан. Баланс: {data['balance']:.2f} ₽")
+    st.rerun()
 
 
 def page_cabinet():
-    user = get_current_user()
+    user = require_login()
     if not user:
-        st.warning("Войдите в систему, чтобы открыть личный кабинет.")
-        if st.button("Перейти ко входу"):
-            st.session_state.page = "Вход"
-            st.rerun()
         return
 
-    user = run_with_context(get_user_by_id, user.id)
-
     st.title("Личный кабинет")
-    st.caption(f"Добро пожаловать, **{user.username}**!")
-
-    c1, c2, c3, c4 = st.columns(4)
-    c1.metric("ID", user.id)
-    c2.metric("Роль", user.role)
-    c3.metric("Баланс", f"{user.get_balance():.2f} ₽")
-    c4.metric("Логин", user.username)
-
-    st.divider()
+    c1, c2, c3 = st.columns(3)
+    c1.metric("Логин", user["username"])
+    c2.metric("Роль", user["role"])
+    c3.metric("Баланс, ₽", f"{user['balance']:.2f}")
+    st.caption("Баланс хранится на backend. Интерфейс только запрашивает и инициирует операции.")
 
     st.subheader("Пополнить баланс")
-    with st.form("top_up_form"):
-        amount = st.number_input("Сумма (₽)", min_value=1.0, value=100.0, step=10.0)
+    cols = st.columns(4)
+    for amount, col in zip((50, 100, 250, 500), cols):
+        if col.button(f"+ {amount} ₽", use_container_width=True):
+            try:
+                result = api.top_up(token(), float(amount))
+                st.success(f"Пополнено на {amount} ₽. Новый баланс: {result['balance']:.2f} ₽")
+                st.rerun()
+            except APIError as exc:
+                show_api_error(exc)
+
+    with st.form("top_up_manual"):
+        amount = st.number_input("Сумма вручную (₽)", min_value=1.0, value=100.0, step=10.0)
         if st.form_submit_button("Пополнить", type="primary"):
             try:
-                run_with_context(top_up_balance, user.id, float(amount))
-                st.success(f"Баланс пополнен на {amount:.2f} ₽")
+                result = api.top_up(token(), float(amount))
+                st.success(f"Пополнено на {amount:.2f} ₽. Новый баланс: {result['balance']:.2f} ₽")
                 st.rerun()
-            except ValueError as exc:
-                st.error(str(exc))
+            except APIError as exc:
+                show_api_error(exc)
 
-    st.divider()
 
-    st.subheader("Купить ML-модель")
-    models = run_with_context(get_active_models)
+def _parse_uploaded_table(uploaded) -> list[str]:
+    name = uploaded.name.lower()
+    raw = uploaded.getvalue()
+    if name.endswith(".csv"):
+        df = pd.read_csv(io.BytesIO(raw))
+        for column in ("path", "image_path", "image", "file"):
+            if column in df.columns:
+                return [str(value) for value in df[column].tolist()]
+        return [str(value) for value in df.iloc[:, 0].tolist()]
+    text = raw.decode("utf-8", errors="replace")
+    return [line.strip() for line in text.splitlines() if line.strip()]
+
+
+def page_predict():
+    user = require_login()
+    if not user:
+        return
+
+    st.title("ML-запрос")
+    st.caption(
+        f"Баланс: **{user['balance']:.2f} ₽**. "
+        "Списание только после успешного предикта. Некорректные строки вернутся в таблице ошибок."
+    )
+    if user["balance"] <= 0:
+        st.error("Недостаточно средств на балансе. Пополните счёт в кабинете — запрос не будет выполнен.")
+
+    try:
+        models = api.list_models(token())
+    except APIError as exc:
+        show_api_error(exc)
+        return
     if not models:
-        st.info("Модели не найдены.")
-    else:
-        for model in models:
-            with st.container(border=True):
-                col_a, col_b = st.columns([3, 1])
-                with col_a:
-                    st.markdown(f"**{model.name}**")
-                    st.write(model.description)
-                    st.write(f"Цена: **{model.price:.2f} ₽**")
-                with col_b:
-                    can_buy = user.get_balance() >= model.price
-                    if st.button(
-                        "Купить",
-                        key=f"buy_{model.id}",
-                        disabled=not can_buy,
-                        type="primary",
-                        use_container_width=True,
-                    ):
-                        try:
-                            run_with_context(purchase_model, user.id, model.id)
-                            st.success(f"Модель «{model.name}» куплена!")
-                            st.rerun()
-                        except ValueError as exc:
-                            st.error(str(exc))
-                    if not can_buy:
-                        st.caption("Недостаточно средств")
+        st.info("Нет активных моделей.")
+        return
 
-    st.divider()
+    options = {f"{item['name']} — {item['price']:.2f} ₽": item for item in models}
+    selected = st.selectbox("Модель", list(options.keys()))
+    model = options[selected]
 
-    st.subheader("Мои покупки")
-    tasks = run_with_context(get_user_tasks_rows, user.id)
-    if tasks:
-        st.dataframe(tasks, use_container_width=True, hide_index=True)
-    else:
-        st.info("Покупок пока нет.")
+    st.markdown("Введите пути **по одному на строку** и/или загрузите файл (изображение, txt, csv).")
+    text_items = st.text_area(
+        "Входные данные",
+        value="uploads/demo.jpg\nuploads/bad path!.jpg",
+        height=120,
+    )
+    files = st.file_uploader(
+        "Файлы",
+        accept_multiple_files=True,
+        type=["jpg", "jpeg", "png", "bmp", "webp", "txt", "csv"],
+    )
 
-    st.divider()
+    if not st.button("Отправить в ML-сервис", type="primary"):
+        return
 
-    st.subheader("История операций")
-    transactions = run_with_context(get_user_transactions, user.id)
-    if transactions:
-        type_labels = {
-            "top_up": "Пополнение",
-            "purchase": "Покупка модели",
-            "spend": "Списание",
-            "refund": "Возврат",
-        }
+    items: list[str] = [line.strip() for line in text_items.splitlines() if line.strip()]
+    access = token()
+    for uploaded in files or []:
+        name = uploaded.name.lower()
+        try:
+            if name.endswith((".txt", ".csv")):
+                items.extend(_parse_uploaded_table(uploaded))
+            else:
+                saved = api.upload_file(access, uploaded.name, uploaded.getvalue())
+                items.append(saved["path"])
+                st.caption(f"Загружено: {saved['filename']} → `{saved['path']}`")
+        except APIError as exc:
+            show_api_error(exc)
+            return
+
+    if not items:
+        st.error("Добавьте хотя бы одну строку или файл.")
+        return
+
+    try:
+        result = api.create_predictions(access, model["id"], items)
+    except APIError as exc:
+        show_api_error(exc)
+        return
+
+    st.success(result.get("message", "Запрос принят"))
+    st.info(f"Баланс после постановки в очередь (ещё без списания): {result['balance']:.2f} ₽")
+
+    rejected = result.get("rejected") or []
+    accepted = result.get("accepted") or []
+    col_a, col_b = st.columns(2)
+    with col_a:
+        st.subheader("Обработаны (приняты)")
+        if accepted:
+            st.dataframe(
+                [
+                    {
+                        "task_id": item["id"],
+                        "данные": item["image_path"],
+                        "статус": STATUS_LABELS.get(item["status"], item["status"]),
+                    }
+                    for item in accepted
+                ],
+                use_container_width=True,
+                hide_index=True,
+            )
+        else:
+            st.write("Нет")
+    with col_b:
+        st.subheader("Отклонены валидацией")
+        if rejected:
+            st.dataframe(rejected, use_container_width=True, hide_index=True)
+        else:
+            st.write("Нет")
+
+
+def page_history():
+    user = require_login()
+    if not user:
+        return
+
+    st.title("История операций и предсказаний")
+    if st.button("Обновить"):
+        st.rerun()
+
+    access = token()
+    try:
+        pred = api.prediction_history(access, user["id"])
+        txs = api.transactions(access, user["id"])
+    except APIError as exc:
+        show_api_error(exc)
+        return
+
+    st.subheader("ML-запросы")
+    rows = pred.get("predictions") or []
+    if rows:
         st.dataframe(
             [
                 {
-                    "Дата": tx.created_at.strftime("%d.%m.%Y %H:%M"),
-                    "Тип": type_labels.get(tx.transaction_type, tx.transaction_type),
-                    "Сумма": f"{tx.amount:.2f} ₽",
+                    "Дата": item["created_at"],
+                    "Данные": item["image_path"],
+                    "Модель": item.get("model_name") or item["model_id"],
+                    "Статус": STATUS_LABELS.get(item["status"], item["status"]),
+                    "Списание, ₽": item.get("charged", 0),
+                    "Детекций": len(item["predictions"] or []),
                 }
-                for tx in transactions
+                for item in rows
+            ],
+            use_container_width=True,
+            hide_index=True,
+        )
+        ids = [item["id"] for item in rows]
+        selected = st.selectbox("Результат задачи", ids)
+        try:
+            detail = api.get_prediction(access, int(selected))
+        except APIError as exc:
+            show_api_error(exc)
+            return
+        st.write(
+            f"Статус: **{STATUS_LABELS.get(detail['status'], detail['status'])}** · "
+            f"списано {detail.get('charged', 0):.2f} ₽"
+        )
+        if detail["status"] in {"created", "running"}:
+            st.info("Воркер ещё считает. Нажмите «Обновить».")
+        detections = detail.get("predictions") or []
+        if detections:
+            st.dataframe(detections, use_container_width=True, hide_index=True)
+        elif detail["status"] == "completed":
+            st.info("Детекций нет.")
+        elif detail["status"] == "failed":
+            st.error("Предикт не удался, списания нет (или выполнен возврат).")
+    else:
+        st.info("Запросов пока нет.")
+
+    st.subheader("Движение кредитов")
+    tx_rows = txs.get("transactions") or []
+    if tx_rows:
+        st.dataframe(
+            [
+                {
+                    "Дата": item["created_at"],
+                    "Тип": TX_LABELS.get(item["type"], item["type"]),
+                    "Сумма, ₽": item["amount"],
+                    "Задача": item.get("task_id") or "—",
+                }
+                for item in tx_rows
             ],
             use_container_width=True,
             hide_index=True,
         )
     else:
-        st.info("Операций пока нет.")
+        st.info("Транзакций пока нет.")
 
 
-PAGES = {
-    "Главная": page_home,
-    "Вход": page_login,
-    "Регистрация": page_register,
-    "Личный кабинет": page_cabinet,
-}
+def page_admin():
+    user = require_login()
+    if not user:
+        return
+    if user["role"] != "admin":
+        st.error("Доступ только для администратора.")
+        return
+
+    st.title("Админ-панель")
+    access = token()
+    try:
+        users = api.list_users(access)
+        txs = api.all_transactions(access)
+    except APIError as exc:
+        show_api_error(exc)
+        return
+
+    st.subheader("Пользователи")
+    st.dataframe(
+        [
+            {
+                "ID": item["id"],
+                "Логин": item["username"],
+                "Роль": item["role"],
+                "Баланс": item["balance"],
+            }
+            for item in users
+        ],
+        use_container_width=True,
+        hide_index=True,
+    )
+
+    st.subheader("Пополнить баланс пользователя")
+    with st.form("admin_top_up"):
+        user_id = st.number_input("ID пользователя", min_value=1, step=1)
+        amount = st.number_input("Сумма (₽)", min_value=1.0, value=100.0, step=10.0)
+        if st.form_submit_button("Пополнить", type="primary"):
+            try:
+                result = api.top_up(access, float(amount), user_id=int(user_id))
+                st.success(f"Баланс пользователя {user_id}: {result['balance']:.2f} ₽")
+                st.rerun()
+            except APIError as exc:
+                show_api_error(exc)
+
+    st.subheader("Все транзакции")
+    tx_rows = txs.get("transactions") or []
+    if tx_rows:
+        st.dataframe(
+            [
+                {
+                    "Дата": item["created_at"],
+                    "User ID": item["user_id"],
+                    "Тип": TX_LABELS.get(item["type"], item["type"]),
+                    "Сумма": item["amount"],
+                    "Задача": item.get("task_id") or "—",
+                }
+                for item in tx_rows
+            ],
+            use_container_width=True,
+            hide_index=True,
+        )
+    else:
+        st.info("Транзакций нет.")
 
 
 def main():
     st.set_page_config(
-        page_title="ML Service — СКУД",
+        page_title="ML Service — кабинет",
         page_icon="🎯",
         layout="wide",
         initial_sidebar_state="expanded",
     )
-
     init_session()
+    user = current_user()
+
+    if user:
+        pages = ["Главная", "Личный кабинет", "ML-запрос", "История"]
+        if user["role"] == "admin":
+            pages.append("Админ")
+    else:
+        pages = ["Главная", "Вход", "Регистрация"]
 
     with st.sidebar:
         st.header("Навигация")
-        user = get_current_user()
+        page = st.selectbox("Выбрать страницу", pages)
         if user:
-            st.write(f"👤 {user.username}")
-            st.write(f"💰 {user.get_balance():.2f} ₽")
+            st.write(f"👤 {user['username']}")
+            st.write(f"💰 {user['balance']:.2f} ₽")
             if st.button("Выйти", use_container_width=True):
-                logout()
+                st.session_state.access_token = None
                 st.rerun()
-            st.divider()
+        st.caption("UI → REST API → очередь → воркер")
 
-        pages = list(PAGES.keys())
-        if user and st.session_state.page not in pages:
-            st.session_state.page = "Личный кабинет"
-
-        selected = st.radio(
-            "Раздел",
-            pages,
-            index=pages.index(st.session_state.page) if st.session_state.page in pages else 0,
-            label_visibility="collapsed",
-        )
-        st.session_state.page = selected
-
-    PAGES[st.session_state.page]()
+    if page == "Главная":
+        page_home()
+    elif page == "Вход":
+        page_login()
+    elif page == "Регистрация":
+        page_register()
+    elif page == "Личный кабинет":
+        page_cabinet()
+    elif page == "ML-запрос":
+        page_predict()
+    elif page == "История":
+        page_history()
+    elif page == "Админ":
+        page_admin()
 
 
 if __name__ == "__main__":

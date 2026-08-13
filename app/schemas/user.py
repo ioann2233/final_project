@@ -24,3 +24,8 @@ class UserResponse(BaseModel):
     created_at: Optional[datetime] = None
 
     model_config = {"from_attributes": True}
+
+
+class SignInResponse(UserResponse):
+    access_token: str
+    token_type: str = "bearer"

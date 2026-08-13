@@ -10,8 +10,12 @@ class BalanceResponse(BaseModel):
 
 
 class TopUpRequest(BaseModel):
-    user_id: int = Field(..., examples=[1])
     amount: float = Field(..., gt=0, examples=[100.0])
+    user_id: Optional[int] = Field(
+        default=None,
+        examples=[1],
+        description="По умолчанию текущий пользователь. Админ может указать другого.",
+    )
 
 
 class TransactionInfo(BaseModel):
@@ -29,5 +33,5 @@ class TopUpResponse(BaseModel):
 
 
 class TransactionHistoryResponse(BaseModel):
-    user_id: int
+    user_id: Optional[int] = None
     transactions: list[TransactionInfo]

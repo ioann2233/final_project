@@ -15,7 +15,7 @@ async def index() -> Dict[str, str]:
     return {
         "message": "ML Service API",
         "docs": "/api/docs",
-        "ui": "Streamlit на порту 8501",
+        "ui": "Streamlit на порту 8501 (http://localhost/ через nginx)",
     }
 
 

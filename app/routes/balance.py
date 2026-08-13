@@ -1,4 +1,5 @@
-from fastapi import APIRouter, HTTPException, status
+from deps import get_current_user, require_admin
+from fastapi import APIRouter, Depends, HTTPException, status
 from schemas.balance import (
     BalanceResponse,
     TopUpRequest,
@@ -6,7 +7,7 @@ from schemas.balance import (
     TransactionHistoryResponse,
     TransactionInfo,
 )
-from service.testing.transaction import get_user_transactions
+from service.testing.transaction import get_all_transactions, get_user_transactions
 from service.testing.user import get_user_by_id
 from service.testing.wallet import get_balance, top_up_balance
 from ui.context import run_with_context
@@ -27,11 +28,33 @@ def _to_transaction_info(tx) -> TransactionInfo:
 
 
 @balance_route.get(
+    "/transactions",
+    response_model=TransactionHistoryResponse,
+    summary="Все транзакции (админ)",
+)
+def all_transactions(_admin=Depends(require_admin)) -> TransactionHistoryResponse:
+    def _handler():
+        transactions = get_all_transactions()
+        return TransactionHistoryResponse(
+            user_id=None,
+            transactions=[_to_transaction_info(tx) for tx in transactions],
+        )
+
+    return run_with_context(_handler)
+
+
+@balance_route.get(
     "/transactions/{user_id}",
     response_model=TransactionHistoryResponse,
     summary="История транзакций пользователя",
 )
-def get_transaction_history(user_id: int) -> TransactionHistoryResponse:
+def get_transaction_history(
+    user_id: int,
+    current=Depends(get_current_user),
+) -> TransactionHistoryResponse:
+    if current.role != "admin" and current.id != user_id:
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Нет доступа")
+
     def _handler():
         user = get_user_by_id(user_id)
         if not user:
@@ -53,7 +76,10 @@ def get_transaction_history(user_id: int) -> TransactionHistoryResponse:
     response_model=BalanceResponse,
     summary="Баланс пользователя",
 )
-def get_user_balance(user_id: int) -> BalanceResponse:
+def get_user_balance(user_id: int, current=Depends(get_current_user)) -> BalanceResponse:
+    if current.role != "admin" and current.id != user_id:
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Нет доступа")
+
     def _handler():
         try:
             value = get_balance(user_id)
@@ -69,10 +95,17 @@ def get_user_balance(user_id: int) -> BalanceResponse:
     response_model=TopUpResponse,
     summary="Пополнение баланса",
 )
-def top_up(data: TopUpRequest) -> TopUpResponse:
+def top_up(data: TopUpRequest, current=Depends(get_current_user)) -> TopUpResponse:
+    target_id = data.user_id or current.id
+    if current.role != "admin" and target_id != current.id:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Можно пополнять только свой баланс",
+        )
+
     def _handler():
-        tx = top_up_balance(data.user_id, data.amount)
-        user = get_user_by_id(data.user_id)
+        tx = top_up_balance(target_id, data.amount)
+        user = get_user_by_id(target_id)
         return TopUpResponse(
             transaction=_to_transaction_info(tx),
             balance=user.get_balance() if user else 0.0,

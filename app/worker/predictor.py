@@ -13,21 +13,31 @@ class ValidationError(ValueError):
 
 def validate_image_path(image_path: str) -> str:
     if not image_path or not isinstance(image_path, str):
-        raise ValidationError("image_path обязателен")
+        raise ValidationError("путь обязателен")
 
     path = image_path.strip()
     if not path:
-        raise ValidationError("image_path пустой")
+        raise ValidationError("пустая строка")
     if len(path) > 500:
-        raise ValidationError("image_path слишком длинный")
+        raise ValidationError("путь слишком длинный (макс. 500 символов)")
     if path in {"pending", "none", "null"}:
-        raise ValidationError(
-            "image_path не задан: передайте путь к изображению "
-            "(например uploads/photo.jpg)"
-        )
+        raise ValidationError("путь не задан: укажите файл или uploads/photo.jpg")
     if not IMAGE_PATH_PATTERN.match(path):
-        raise ValidationError("image_path содержит недопустимые символы")
+        raise ValidationError("недопустимые символы в пути")
     return path
+
+
+def validate_input_items(items: List[str]) -> tuple[List[str], List[dict]]:
+    """Разделяет вход на принятые и отклонённые записи (частичная валидация)."""
+    accepted: List[str] = []
+    rejected: List[dict] = []
+    for index, raw in enumerate(items):
+        value = raw if isinstance(raw, str) else str(raw)
+        try:
+            accepted.append(validate_image_path(value))
+        except ValidationError as exc:
+            rejected.append({"index": index, "value": value, "error": str(exc)})
+    return accepted, rejected
 
 
 def run_prediction(model_name: str, model_path: str, image_path: str) -> List[dict]:
