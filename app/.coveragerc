@@ -1,0 +1,14 @@
+[run]
+source = .
+omit =
+    tests/*
+    */__pycache__/*
+    seed.py
+    test_orm.py
+    streamlit_app.py
+    flask_routes.py
+
+[report]
+show_missing = True
+skip_empty = True
+precision = 1

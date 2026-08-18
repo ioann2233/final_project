@@ -82,12 +82,10 @@ def _refund_task_payment(task) -> float:
         (tx for tx in task.transactions if tx.transaction_type == "purchase"),
         None,
     )
-    if purchase and purchase.amount > 0:
-        amount = float(purchase.amount)
-    elif task.model and task.model.price > 0:
-        amount = float(task.model.price)
-    else:
+    if not purchase or purchase.amount <= 0:
         return 0.0
+
+    amount = float(purchase.amount)
 
     from extensions import db
 
