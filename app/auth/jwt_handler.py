@@ -11,7 +11,7 @@ TOKEN_EXPIRE_SECONDS = 8 * 3600
 
 
 class TokenError(Exception):
-    """Ошибка JWT: нет токена, истёк или подпись неверна."""
+    pass
 
 
 def create_access_token(user: str) -> str:

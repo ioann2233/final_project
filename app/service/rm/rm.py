@@ -25,7 +25,6 @@ def _connection_params() -> pika.ConnectionParameters:
 
 
 def send_ml_task(payload: Dict[str, Any]) -> None:
-    """Публикация ML-задачи в очередь (один издатель → несколько слушателей)."""
     body = json.dumps(payload, ensure_ascii=False)
     connection = pika.BlockingConnection(_connection_params())
     try:

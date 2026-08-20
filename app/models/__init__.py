@@ -1,4 +1,5 @@
 from models.base import BaseModel, TaskStatus
+from models.known_entity import KnownEntity
 from models.ml_model import MLModel
 from models.ml_task import MLTask
 from models.prediction import PredictionResult
@@ -11,6 +12,7 @@ __all__ = [
     "TaskStatus",
     "Wallet",
     "User",
+    "KnownEntity",
     "MLModel",
     "PredictionResult",
     "Transaction",

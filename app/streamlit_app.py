@@ -1,7 +1,5 @@
-import io
 from typing import Optional
 
-import pandas as pd
 import streamlit as st
 
 from auth.forms import LoginForm, RegisterForm
@@ -68,13 +66,13 @@ def page_home():
 
 **Что умеет кабинет**
 - регистрация и вход (JWT);
+- **камера**: детекция людей и машин, зелёная рамка — «свой», красная — «чужой»;
+- **свои люди и машины**: загрузка фото для распознавания;
 - баланс в условных кредитах и пополнение без эквайринга;
-- ML-запрос через тот же REST API, что доступен снаружи;
-- частичная валидация входа: ошибочные строки возвращаются, корректные идут в предикт;
 - история загрузок, предсказаний и списаний.
 
-Списание кредитов происходит **только после успешного** выполнения запроса воркером.
-При нулевом или недостаточном балансе запрос не ставится в очередь.
+Списание кредитов происходит **только после успешной** детекции (файл через воркер или снимок с камеры).
+При нулевом или недостаточном балансе запрос отклоняется.
         """
     )
     user = current_user()
@@ -189,114 +187,27 @@ def page_cabinet():
                 show_api_error(exc)
 
 
-def _parse_uploaded_table(uploaded) -> list[str]:
-    name = uploaded.name.lower()
-    raw = uploaded.getvalue()
-    if name.endswith(".csv"):
-        df = pd.read_csv(io.BytesIO(raw))
-        for column in ("path", "image_path", "image", "file"):
-            if column in df.columns:
-                return [str(value) for value in df[column].tolist()]
-        return [str(value) for value in df.iloc[:, 0].tolist()]
-    text = raw.decode("utf-8", errors="replace")
-    return [line.strip() for line in text.splitlines() if line.strip()]
-
-
-def page_predict():
-    user = require_login()
-    if not user:
-        return
-
-    st.title("ML-запрос")
-    st.caption(
-        f"Баланс: **{user['balance']:.2f} ₽**. "
-        "Списание только после успешного предикта. Некорректные строки вернутся в таблице ошибок."
-    )
-    if user["balance"] <= 0:
-        st.error("Недостаточно средств на балансе. Пополните счёт в кабинете — запрос не будет выполнен.")
-
+def _format_dt(value) -> str:
+    if not value:
+        return "—"
+    text = str(value)
     try:
-        models = api.list_models(token())
-    except APIError as exc:
-        show_api_error(exc)
-        return
-    if not models:
-        st.info("Нет активных моделей.")
-        return
+        from datetime import datetime
 
-    options = {f"{item['name']} — {item['price']:.2f} ₽": item for item in models}
-    selected = st.selectbox("Модель", list(options.keys()))
-    model = options[selected]
+        dt = datetime.fromisoformat(text.replace("Z", "+00:00"))
+        return dt.strftime("%d.%m.%Y %H:%M:%S")
+    except ValueError:
+        return text[:19].replace("T", " ")
 
-    st.markdown("Введите пути **по одному на строку** и/или загрузите файл (изображение, txt, csv).")
-    text_items = st.text_area(
-        "Входные данные",
-        value="uploads/demo.jpg\nuploads/bad path!.jpg",
-        height=120,
-    )
-    files = st.file_uploader(
-        "Файлы",
-        accept_multiple_files=True,
-        type=["jpg", "jpeg", "png", "bmp", "webp", "txt", "csv"],
-    )
 
-    if not st.button("Отправить в ML-сервис", type="primary"):
-        return
-
-    items: list[str] = [line.strip() for line in text_items.splitlines() if line.strip()]
-    access = token()
-    for uploaded in files or []:
-        name = uploaded.name.lower()
-        try:
-            if name.endswith((".txt", ".csv")):
-                items.extend(_parse_uploaded_table(uploaded))
-            else:
-                saved = api.upload_file(access, uploaded.name, uploaded.getvalue())
-                items.append(saved["path"])
-                st.caption(f"Загружено: {saved['filename']} → `{saved['path']}`")
-        except APIError as exc:
-            show_api_error(exc)
-            return
-
-    if not items:
-        st.error("Добавьте хотя бы одну строку или файл.")
-        return
-
-    try:
-        result = api.create_predictions(access, model["id"], items)
-    except APIError as exc:
-        show_api_error(exc)
-        return
-
-    st.success(result.get("message", "Запрос принят"))
-    st.info(f"Баланс после постановки в очередь (ещё без списания): {result['balance']:.2f} ₽")
-
-    rejected = result.get("rejected") or []
-    accepted = result.get("accepted") or []
-    col_a, col_b = st.columns(2)
-    with col_a:
-        st.subheader("Обработаны (приняты)")
-        if accepted:
-            st.dataframe(
-                [
-                    {
-                        "task_id": item["id"],
-                        "данные": item["image_path"],
-                        "статус": STATUS_LABELS.get(item["status"], item["status"]),
-                    }
-                    for item in accepted
-                ],
-                use_container_width=True,
-                hide_index=True,
-            )
-        else:
-            st.write("Нет")
-    with col_b:
-        st.subheader("Отклонены валидацией")
-        if rejected:
-            st.dataframe(rejected, use_container_width=True, hide_index=True)
-        else:
-            st.write("Нет")
+def _source_label(path: str) -> str:
+    normalized = (path or "").replace("\\", "/")
+    name = normalized.rsplit("/", 1)[-1]
+    if "uploads/camera/" in normalized or normalized.startswith("camera/"):
+        if "live" in name or "/live" in normalized:
+            return "Камера (live)"
+        return "Камера"
+    return "Файл"
 
 
 def page_history():
@@ -316,17 +227,19 @@ def page_history():
         show_api_error(exc)
         return
 
-    st.subheader("ML-запросы")
+    st.subheader("Детекции")
     rows = pred.get("predictions") or []
     if rows:
         st.dataframe(
             [
                 {
-                    "Дата": item["created_at"],
+                    "ID": item["id"],
+                    "Дата": _format_dt(item.get("created_at")),
+                    "Источник": _source_label(item.get("image_path") or ""),
                     "Данные": item["image_path"],
                     "Модель": item.get("model_name") or item["model_id"],
                     "Статус": STATUS_LABELS.get(item["status"], item["status"]),
-                    "Списание, ₽": item.get("charged", 0),
+                    "Списание, ₽": round(float(item.get("charged") or 0), 2),
                     "Детекций": len(item["predictions"] or []),
                 }
                 for item in rows
@@ -334,8 +247,19 @@ def page_history():
             use_container_width=True,
             hide_index=True,
         )
-        ids = [item["id"] for item in rows]
-        selected = st.selectbox("Результат задачи", ids)
+        labels = {
+            item["id"]: (
+                f"#{item['id']} · {item.get('model_name') or item['model_id']} · "
+                f"{STATUS_LABELS.get(item['status'], item['status'])} · "
+                f"{float(item.get('charged') or 0):.2f} ₽"
+            )
+            for item in rows
+        }
+        selected = st.selectbox(
+            "Результат задачи",
+            options=list(labels.keys()),
+            format_func=lambda task_id: labels[task_id],
+        )
         try:
             detail = api.get_prediction(access, int(selected))
         except APIError as exc:
@@ -343,7 +267,7 @@ def page_history():
             return
         st.write(
             f"Статус: **{STATUS_LABELS.get(detail['status'], detail['status'])}** · "
-            f"списано {detail.get('charged', 0):.2f} ₽"
+            f"списано **{float(detail.get('charged') or 0):.2f} ₽**"
         )
         if detail["status"] in {"created", "running"}:
             st.info("Воркер ещё считает. Нажмите «Обновить».")
@@ -354,6 +278,8 @@ def page_history():
             st.info("Детекций нет.")
         elif detail["status"] == "failed":
             st.error("Предикт не удался, списания нет (или выполнен возврат).")
+        elif detail["status"] == "not enough balance":
+            st.error("Недостаточно средств — списания нет.")
     else:
         st.info("Запросов пока нет.")
 
@@ -363,10 +289,10 @@ def page_history():
         st.dataframe(
             [
                 {
-                    "Дата": item["created_at"],
-                    "Тип": TX_LABELS.get(item["type"], item["type"]),
-                    "Сумма, ₽": item["amount"],
-                    "Задача": item.get("task_id") or "—",
+                    "Дата": _format_dt(item.get("created_at")),
+                    "Тип": TX_LABELS.get(item.get("type"), item.get("type")),
+                    "Сумма, ₽": round(float(item.get("amount") or 0), 2),
+                    "Задача": item.get("task_id") if item.get("task_id") else "—",
                 }
                 for item in tx_rows
             ],
@@ -452,16 +378,36 @@ def main():
     init_session()
     user = current_user()
 
+    PAGE_LABELS = {
+        "home": "Главная",
+        "login": "Вход",
+        "register": "Регистрация",
+        "cabinet": "Личный кабинет",
+        "camera": "Камера",
+        "known": "Свои люди и машины",
+        "history": "История",
+        "admin": "Админ",
+    }
+
     if user:
-        pages = ["Главная", "Личный кабинет", "ML-запрос", "История"]
+        page_keys = ["home", "cabinet", "camera", "known", "history"]
         if user["role"] == "admin":
-            pages.append("Админ")
+            page_keys.append("admin")
     else:
-        pages = ["Главная", "Вход", "Регистрация"]
+        page_keys = ["home", "login", "register"]
+
+    if st.session_state.get("main_navigation") not in page_keys:
+        st.session_state.main_navigation = page_keys[0]
 
     with st.sidebar:
         st.header("Навигация")
-        page = st.selectbox("Выбрать страницу", pages)
+        page_key = st.radio(
+            "Страница",
+            options=page_keys,
+            format_func=lambda key: PAGE_LABELS[key],
+            key="main_navigation",
+            label_visibility="collapsed",
+        )
         if user:
             st.write(f"👤 {user['username']}")
             st.write(f"💰 {user['balance']:.2f} ₽")
@@ -470,19 +416,25 @@ def main():
                 st.rerun()
         st.caption("UI → REST API → очередь → воркер")
 
-    if page == "Главная":
+    if page_key == "home":
         page_home()
-    elif page == "Вход":
+    elif page_key == "login":
         page_login()
-    elif page == "Регистрация":
+    elif page_key == "register":
         page_register()
-    elif page == "Личный кабинет":
+    elif page_key == "cabinet":
         page_cabinet()
-    elif page == "ML-запрос":
-        page_predict()
-    elif page == "История":
+    elif page_key == "camera":
+        from ui.camera_detection import page_camera
+
+        page_camera(require_login, show_api_error, token)
+    elif page_key == "known":
+        from ui.camera_detection import page_known_entities
+
+        page_known_entities(require_login, show_api_error, token)
+    elif page_key == "history":
         page_history()
-    elif page == "Админ":
+    elif page_key == "admin":
         page_admin()
 
 

@@ -2,7 +2,6 @@ from database.database import init_db
 from main import create_app
 from service.testing.ml_model import create_ml_model, get_all_models
 from service.testing.user import create_user, get_user_by_username
-from service.testing.wallet import top_up_balance
 
 DEMO_USERS = [
     {
@@ -28,7 +27,7 @@ DEMO_MODELS = [
     },
     {
         "name": "YOLOv8s Detection",
-        "description": "Средняя модель де",
+        "description": "Средняя модель",
         "price": 25.0,
         "model_path": "yolov8s.pt",
     },
@@ -70,14 +69,6 @@ def seed_database(drop_all: bool = True) -> None:
 
             model = create_ml_model(**model_data)
             print(f"  создана: {model}")
-
-        demo_user = get_user_by_username("demo_user")
-        if demo_user:
-            tx = top_up_balance(demo_user.id, 50.0)
-            print(
-                f"\n=== Seed: доп. пополнение demo_user на 50.0 "
-                f"(tx_id={tx.id}, баланс={demo_user.get_balance()}) ==="
-            )
 
         print("\nSeed завершён успешно.")
 

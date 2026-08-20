@@ -28,6 +28,12 @@ class User(BaseModel):
         cascade="all, delete-orphan",
         lazy="select",
     )
+    known_entities = db.relationship(
+        "KnownEntity",
+        back_populates="owner",
+        cascade="all, delete-orphan",
+        lazy="select",
+    )
 
     def get_balance(self) -> float:
         if not self.wallet:

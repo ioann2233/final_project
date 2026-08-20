@@ -1,5 +1,3 @@
-"""Тесты регистрации и авторизации пользователей."""
-
 from fastapi.testclient import TestClient
 
 

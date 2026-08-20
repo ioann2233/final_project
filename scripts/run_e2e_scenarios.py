@@ -1,14 +1,3 @@
-"""
-Сквозные E2E-сценарии против запущенного Docker Compose.
-
-Запуск:
-  docker compose up --build -d --scale ml_worker=3
-  docker compose exec api python seed.py
-  python scripts/run_e2e_scenarios.py
-
-Переменная окружения API_BASE_URL (по умолчанию http://localhost:8080).
-"""
-
 from __future__ import annotations
 
 import json

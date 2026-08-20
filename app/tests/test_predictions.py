@@ -1,5 +1,3 @@
-"""Тесты ML-запросов, списания кредитов и истории предсказаний."""
-
 from unittest.mock import patch
 
 import pytest
@@ -125,6 +123,89 @@ def test_prediction_history(client: TestClient, auth_headers, flask_app):
     assert history["predictions"][0]["id"] == task_id
     assert history["predictions"][0]["status"] == "completed"
     assert history["predictions"][0]["charged"] == 10.0
+
+
+def _jpeg_bytes() -> bytes:
+    import cv2
+    import numpy as np
+
+    ok, buf = cv2.imencode(".jpg", np.zeros((16, 16, 3), dtype=np.uint8))
+    assert ok
+    return buf.tobytes()
+
+
+class _FakeDetector:
+    def classify_detections(self, frame, known):
+        return [{"label": "person", "confidence": 0.91, "bbox": [1, 2, 3, 4]}]
+
+
+def test_camera_detection_charges_balance(client: TestClient, auth_headers):
+    headers = auth_headers("cam_user", "pass1234", 100.0)
+    me = client.get("/api/users/me", headers=headers).json()
+    user_id = me["id"]
+
+    with patch(
+        "service.detection.detector.get_camera_detector",
+        return_value=_FakeDetector(),
+    ):
+        response = client.post(
+            "/api/predictions/camera",
+            headers=headers,
+            files={"file": ("snap.jpg", _jpeg_bytes(), "image/jpeg")},
+            data={"model_id": "1", "mode": "snapshot"},
+        )
+        again = client.post(
+            "/api/predictions/camera",
+            headers=headers,
+            files={"file": ("snap2.jpg", _jpeg_bytes(), "image/jpeg")},
+            data={"model_id": "1", "mode": "snapshot"},
+        )
+
+    assert response.status_code == 201, response.text
+    data = response.json()
+    assert data["detections_count"] == 1
+    assert data["charged"] == 10.0
+    assert data["balance"] == 90.0
+    assert data["price"] == 10.0
+
+    assert again.status_code == 201, again.text
+    assert again.json()["charged"] == 10.0
+    assert again.json()["balance"] == 80.0
+
+    detail = client.get(f"/api/predictions/{data['id']}", headers=headers).json()
+    assert detail["status"] == "completed"
+    assert detail["charged"] == 10.0
+
+    balance = client.get(f"/api/balance/{user_id}", headers=headers).json()
+    assert balance["balance"] == 80.0
+
+    history = client.get(
+        f"/api/predictions/history/{user_id}",
+        headers=headers,
+    ).json()["predictions"]
+    assert len(history) == 2
+    assert {item["charged"] for item in history} == {10.0}
+
+    txs = client.get(
+        f"/api/balance/transactions/{user_id}",
+        headers=headers,
+    ).json()["transactions"]
+    purchase = [tx for tx in txs if tx["type"] == "purchase"]
+    assert len(purchase) == 2
+    assert {tx["amount"] for tx in purchase} == {10.0}
+    assert {tx["task_id"] for tx in purchase} == {data["id"], again.json()["id"]}
+
+
+def test_camera_detection_insufficient_balance(client: TestClient, auth_headers):
+    headers = auth_headers("cam_poor", "pass1234", 5.0)
+    response = client.post(
+        "/api/predictions/camera",
+        headers=headers,
+        files={"file": ("snap.jpg", _jpeg_bytes(), "image/jpeg")},
+        data={"model_id": "1", "mode": "snapshot"},
+    )
+    assert response.status_code == 400
+    assert "Недостаточно средств" in response.json()["detail"]
 
 
 def test_purchase_transaction_in_history(client: TestClient, auth_headers, flask_app):

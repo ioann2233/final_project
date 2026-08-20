@@ -1,16 +1,3 @@
-"""
-Генерация единого HTML-отчёта coverage в корне проекта.
-
-По образцу lesson 7:
-  1. pip install coverage
-  2. coverage run -m pytest
-  3. coverage report
-  4. coverage html  →  COVERAGE_REPORT.html (один файл в корне)
-
-Запуск из корня проекта:
-  python scripts/generate_coverage_report.py
-"""
-
 from __future__ import annotations
 
 import html

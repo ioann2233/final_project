@@ -9,11 +9,10 @@ COOKIE_NAME = "access_token"
 
 
 class AuthError(Exception):
-    """Ошибка входа: нет пользователя или неверный пароль."""
+    pass
 
 
 def login_for_access_token(username: str, password: str) -> Tuple[str, object]:
-    """Проверка пароля и выдача JWT — аналог /auth/token из lesson6."""
     user = run_with_context(authenticate_user, username, password)
     if user is None:
         raise AuthError("Неверный логин или пароль")
@@ -22,7 +21,6 @@ def login_for_access_token(username: str, password: str) -> Tuple[str, object]:
 
 
 def authenticate(token: Optional[str]):
-    """Проверка JWT из «cookie» (session_state). Как authenticate_cookie в lesson6."""
     if not token:
         return None
     try:

@@ -16,3 +16,8 @@ python-multipart
 pytest
 httpx
 coverage
+opencv-python-headless==4.10.0.84
+numpy<2.2
+streamlit-webrtc==0.47.7
+av==12.3.0
+tornado>=6.0

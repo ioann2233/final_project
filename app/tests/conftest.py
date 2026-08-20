@@ -1,5 +1,3 @@
-"""Фикстуры pytest: in-memory SQLite, сид ML-модели, mock RabbitMQ."""
-
 from __future__ import annotations
 
 import os
@@ -65,7 +63,6 @@ def client_fixture(flask_app) -> Generator[TestClient, None, None]:
 
 @pytest.fixture
 def auth_headers(client: TestClient) -> Callable[[str, str, float], dict]:
-    """Регистрирует пользователя и возвращает заголовки Authorization."""
 
     def _register(
         username: str = "testuser",

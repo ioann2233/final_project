@@ -58,16 +58,18 @@ def api_request(
     token: Optional[str] = None,
     json: Any = None,
     files: Any = None,
+    data: Any = None,
     timeout: int = 30,
 ) -> Any:
     url = f"{API_BASE}{path}"
     try:
-        if files is not None:
+        if files is not None or data is not None:
             response = requests.request(
                 method,
                 url,
                 headers=_headers(token, json_body=False),
                 files=files,
+                data=data,
                 timeout=timeout,
             )
         else:
@@ -162,3 +164,51 @@ def prediction_history(token: str, user_id: int) -> dict:
 
 def get_prediction(token: str, task_id: int) -> dict:
     return api_request("GET", f"/api/predictions/{task_id}", token=token)
+
+
+def list_known_entities(token: str) -> list:
+    data = api_request("GET", "/api/known-entities/", token=token) or {}
+    return data.get("entities") or []
+
+
+def list_known_entities_for_detection(token: str) -> list:
+    data = api_request("GET", "/api/known-entities/detection-data", token=token) or {}
+    return data.get("entities") or []
+
+
+def add_known_entity(
+    token: str,
+    name: str,
+    entity_type: str,
+    filename: str,
+    content: bytes,
+) -> dict:
+    return api_request(
+        "POST",
+        "/api/known-entities/",
+        token=token,
+        files={"file": (filename, content)},
+        data={"name": name, "entity_type": entity_type},
+    )
+
+
+def delete_known_entity(token: str, entity_id: int) -> None:
+    api_request("DELETE", f"/api/known-entities/{entity_id}", token=token)
+
+
+def log_camera_detection(
+    token: str,
+    model_id: int,
+    mode: str,
+    filename: str,
+    content: bytes,
+    timeout: int = 120,
+) -> dict:
+    return api_request(
+        "POST",
+        "/api/predictions/camera",
+        token=token,
+        files={"file": (filename, content)},
+        data={"model_id": str(model_id), "mode": mode},
+        timeout=timeout,
+    )

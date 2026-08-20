@@ -1,5 +1,3 @@
-"""ML worker: получает задачи из RabbitMQ, валидирует, предиктит, пишет результат."""
-
 from __future__ import annotations
 
 import json
@@ -66,7 +64,6 @@ def _parse_message(body: bytes) -> Dict[str, Any]:
 
 
 def _refund_task_payment(task) -> float:
-    """Возвращает списанные за задачу средства. Работа не выполнена."""
     from models.transaction import Transaction
 
     if not task.user or not task.user.wallet:
@@ -232,7 +229,6 @@ def on_message(ch, method, _properties, body: bytes) -> None:
         ch.basic_ack(delivery_tag=method.delivery_tag)
     except Exception as exc:
         logger.exception("[%s] Ошибка обработки: %s", WORKER_ID, exc)
-        # ack после записи FAILED / невалидного сообщения — без бесконечного retry
         ch.basic_ack(delivery_tag=method.delivery_tag)
 
 

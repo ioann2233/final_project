@@ -1,5 +1,3 @@
-"""Тесты health-check и корневого эндпоинта."""
-
 from fastapi.testclient import TestClient
 
 

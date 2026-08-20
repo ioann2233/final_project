@@ -10,12 +10,10 @@ class PredictionCreate(BaseModel):
         default=None,
         max_length=500,
         examples=["uploads/photo.jpg"],
-        description="Один путь (совместимость). Либо используйте items.",
     )
     items: Optional[List[str]] = Field(
         default=None,
         examples=[["uploads/a.jpg", "uploads/b.jpg"]],
-        description="Список входных данных: валидные пойдут в предикт, невалидные вернутся в rejected",
     )
 
 
@@ -80,3 +78,17 @@ class PredictionHistoryResponse(BaseModel):
 class UploadResponse(BaseModel):
     path: str
     filename: str
+
+
+class CameraDetectionResponse(BaseModel):
+    id: int
+    model_id: int
+    model_name: Optional[str] = None
+    image_path: str
+    mode: str
+    detections_count: int
+    predictions: List[Any]
+    charged: float = 0.0
+    balance: Optional[float] = None
+    price: float = 0.0
+    message: str = "Детекция сохранена в историю, кредиты списаны"

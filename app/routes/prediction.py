@@ -4,8 +4,9 @@ from pathlib import Path
 from typing import Any, List, Optional
 
 from deps import get_current_user
-from fastapi import APIRouter, Depends, File, HTTPException, UploadFile, status
+from fastapi import APIRouter, Depends, File, Form, HTTPException, UploadFile, status
 from schemas.prediction import (
+    CameraDetectionResponse,
     PredictionBatchResponse,
     PredictionCreate,
     PredictionDetailResponse,
@@ -15,6 +16,7 @@ from schemas.prediction import (
     RejectedItem,
     UploadResponse,
 )
+from service.testing.camera_log import create_camera_detection_log
 from service.testing.ml_model import get_ml_model_by_id
 from service.testing.ml_task import (
     charged_amount,
@@ -95,15 +97,102 @@ def upload_input(
     return UploadResponse(path=f"uploads/{filename}", filename=file.filename)
 
 
+CAMERA_DIR = UPLOAD_DIR / "camera"
+CAMERA_MODES = {"snapshot", "live"}
+
+
+@prediction_route.post(
+    "/camera",
+    response_model=CameraDetectionResponse,
+    status_code=status.HTTP_201_CREATED,
+    summary="Детекция с камеры и запись в историю",
+)
+def camera_detection(
+    model_id: int = Form(...),
+    mode: str = Form(...),
+    file: UploadFile = File(...),
+    current=Depends(get_current_user),
+) -> CameraDetectionResponse:
+    if mode not in CAMERA_MODES:
+        raise HTTPException(status_code=400, detail="mode: snapshot или live")
+    if not file.filename:
+        raise HTTPException(status_code=400, detail="Файл не выбран")
+
+    suffix = Path(file.filename).suffix.lower() or ".jpg"
+    if suffix not in {".jpg", ".jpeg", ".png", ".bmp", ".webp"}:
+        raise HTTPException(status_code=400, detail="Нужно изображение jpg/png/webp")
+
+    content = file.file.read()
+
+    def _handler():
+        import cv2
+        import numpy as np
+
+        from service.detection.detector import get_camera_detector
+        from service.known_entity import list_known_entities_payload
+
+        model = get_ml_model_by_id(model_id)
+        if not model or not model.is_active:
+            raise ValueError("Модель не найдена или недоступна")
+
+        user = get_user_by_id(current.id)
+        price = float(model.price)
+        if user and user.get_balance() < price:
+            raise ValueError(
+                f"Недостаточно средств на балансе: нужно {price:.2f} ₽, "
+                f"доступно {user.get_balance():.2f} ₽"
+            )
+
+        image_array = np.frombuffer(content, dtype=np.uint8)
+        frame = cv2.imdecode(image_array, cv2.IMREAD_COLOR)
+        if frame is None:
+            raise ValueError("Не удалось прочитать изображение")
+
+        known = list_known_entities_payload(current.id)
+        detector = get_camera_detector(model.model_path, live_mode=(mode == "live"))
+        detections = detector.classify_detections(frame, known)
+
+        CAMERA_DIR.mkdir(parents=True, exist_ok=True)
+        filename = f"{current.id}_{mode}_{time.time_ns()}{suffix}"
+        dest = CAMERA_DIR / filename
+        dest.write_bytes(content)
+        image_path = f"uploads/camera/{filename}"
+
+        task, charged, balance = create_camera_detection_log(
+            current.id,
+            model_id,
+            mode,
+            detections,
+            image_path,
+        )
+        return CameraDetectionResponse(
+            id=task.id,
+            model_id=model.id,
+            model_name=model.name,
+            image_path=image_path,
+            mode=mode,
+            detections_count=len(detections),
+            predictions=detections,
+            charged=charged,
+            balance=balance,
+            price=price,
+            message=(
+                f"Детекция сохранена в историю. Списано {charged:.2f} ₽, "
+                f"баланс {balance:.2f} ₽"
+            ),
+        )
+
+    try:
+        return run_with_context(_handler)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
 @prediction_route.post(
     "/",
     response_model=PredictionBatchResponse,
     status_code=status.HTTP_201_CREATED,
     summary="ML-запрос (валидация + очередь)",
-    description=(
-        "Валидирует список входных данных: корректные уходят в RabbitMQ, "
-        "ошибочные возвращаются в rejected. Списание — только после успешного предикта."
-    ),
 )
 def create_prediction(
     data: PredictionCreate,

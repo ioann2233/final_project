@@ -6,6 +6,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from routes.balance import balance_route
 from routes.home import home_route
 from routes.models import models_route
+from routes.known_entity import known_entity_route
 from routes.prediction import prediction_route
 from routes.user import user_route
 from ui.context import get_flask_app
@@ -38,6 +39,11 @@ def create_application() -> FastAPI:
     application.include_router(user_route, prefix="/api/users", tags=["Users"])
     application.include_router(balance_route, prefix="/api/balance", tags=["Balance"])
     application.include_router(prediction_route, prefix="/api/predictions", tags=["Predictions"])
+    application.include_router(
+        known_entity_route,
+        prefix="/api/known-entities",
+        tags=["Known entities"],
+    )
     application.include_router(models_route, prefix="/api/models", tags=["Models"])
 
     return application

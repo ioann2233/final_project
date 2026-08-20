@@ -1,5 +1,3 @@
-"""Тесты баланса и истории транзакций."""
-
 from fastapi.testclient import TestClient
 
 

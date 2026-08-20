@@ -1,14 +1,13 @@
-import hashlib
-import random
 import re
 import time
+from pathlib import Path
 from typing import List
 
 IMAGE_PATH_PATTERN = re.compile(r"^[\w\-./\\]+$", re.UNICODE)
 
 
 class ValidationError(ValueError):
-    """Некорректные входные данные ML-задачи."""
+    pass
 
 
 def validate_image_path(image_path: str) -> str:
@@ -28,7 +27,6 @@ def validate_image_path(image_path: str) -> str:
 
 
 def validate_input_items(items: List[str]) -> tuple[List[str], List[dict]]:
-    """Разделяет вход на принятые и отклонённые записи (частичная валидация)."""
     accepted: List[str] = []
     rejected: List[dict] = []
     for index, raw in enumerate(items):
@@ -41,36 +39,35 @@ def validate_input_items(items: List[str]) -> tuple[List[str], List[dict]]:
 
 
 def run_prediction(model_name: str, model_path: str, image_path: str) -> List[dict]:
-    """
-    Эмуляция инференса YOLO-подобной модели.
-    Детерминированный результат по model_path + image_path (удобно для ручных тестов).
-    """
     path = validate_image_path(image_path)
-    time.sleep(1.5)
+    base = Path(__file__).resolve().parent.parent
+    full_path = base / path
+    if not full_path.exists():
+        raise ValidationError(f"файл не найден: {path}")
 
-    seed = int(
-        hashlib.md5(f"{model_path}:{path}".encode("utf-8")).hexdigest()[:8],
-        16,
-    )
-    rng = random.Random(seed)
+    import cv2
 
-    if "access" in model_name.lower() or "контроль" in model_name.lower():
-        classes = ["own", "stranger"]
-    else:
-        classes = ["person", "car", "dog", "cat", "bicycle"]
+    frame = cv2.imread(str(full_path))
+    if frame is None:
+        raise ValidationError(f"не удалось прочитать изображение: {path}")
 
-    count = rng.randint(1, 4)
+    from service.detection.detector import get_camera_detector
+
+    detector = get_camera_detector(model_path, live_mode=False)
+    detections = detector.detect_objects(frame)
+
     predictions: List[dict] = []
-    for i in range(count):
-        cls = classes[rng.randint(0, len(classes) - 1)]
-        x1, y1 = rng.randint(0, 400), rng.randint(0, 400)
-        w, h = rng.randint(40, 200), rng.randint(40, 200)
+    for index, item in enumerate(detections, start=1):
         predictions.append(
             {
-                "class": cls,
-                "confidence": round(rng.uniform(0.55, 0.99), 3),
-                "bbox": [x1, y1, x1 + w, y1 + h],
-                "detection_id": i + 1,
+                "class": item["label"],
+                "confidence": round(float(item["confidence"]), 3),
+                "bbox": item["bbox"],
+                "detection_id": index,
             }
         )
+
+    if "access" in model_name.lower() or "контроль" in model_name.lower():
+        time.sleep(0.5)
+
     return predictions
